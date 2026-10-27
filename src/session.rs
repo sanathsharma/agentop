@@ -2,7 +2,8 @@
 //!
 //! Two signals are combined:
 //!  1. The process tree under each pane's shell (is an agent running here?).
-//!  2. The pane's visible screen (is it working, asking for permission, idle?).
+//!  2. The agent's own session record, then the pane title (is it working,
+//!     asking for permission, idle?). The screen is only used for the preview.
 //!
 //! Optionally, Claude Code hooks (`agentop hook`) record the last lifecycle
 //! event per pane, which lets us tell "finished a turn" apart from "idle" and
@@ -119,8 +120,8 @@ fn merge_hook(
     };
     let since = Some(now().saturating_sub(h.ts));
     match (status, h.event.as_str()) {
-        // The screen is authoritative for live states.
-        (Status::NeedsInput | Status::Working, _) => (status, detail, since),
+        // Live states come from the agent itself. Unknown stays unknown.
+        (Status::NeedsInput | Status::Working | Status::Unknown, _) => (status, detail, since),
         (_, "Stop") => (Status::Done, h.message.clone().unwrap_or_default(), since),
         (_, "Notification") => {
             let msg = h.message.clone().unwrap_or_default();
@@ -170,11 +171,12 @@ pub fn scan() -> Result<Vec<AgentSession>> {
         };
 
         let screen = tmux::capture(&p.id).unwrap_or_default();
-        let (status, detail) = agent.classify(&screen);
-        let context = agent.context_usage(&ProcessInfo {
+        let proc = ProcessInfo {
             pid: agent_pid,
             cwd: p.current_path.clone(),
-        });
+        };
+        let (status, detail) = agent.classify(&proc, &p.title);
+        let context = agent.context_usage(&proc);
         let (status, detail, since_secs) = merge_hook(status, detail, hooks.get(&p.id));
 
         agents.push(AgentSession {

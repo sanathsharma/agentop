@@ -2,7 +2,7 @@
 
 A `top`-style dashboard for Claude Code agents running anywhere on your tmux
 server. Every session is scanned (attached or not), each agent shows whether
-it is **working**, **waiting on you**, **done**, or **idle**, and Enter takes
+it is **working**, **waiting on you**, **done**, **idle**, or **unknown**, and Enter takes
 you straight to its pane — across sessions.
 
 ```
@@ -50,8 +50,8 @@ agentop init          # print config snippets
 ## tmux setup
 
 ```tmux
-bind-key a display-popup -E -w 90% -h 75% "agentop"   # prefix+a: dashboard popup
-bind-key A run-shell "agentop next"                    # prefix+A: jump to next waiting agent
+bind "a" display-popup -E -w 90% -h 90% "agentop"    # prefix+a: dashboard popup
+bind "A" run-shell "agentop next"                    # prefix+A: jump to next waiting agent
 ```
 
 From the popup, Enter switches your client to the target session/window/pane
@@ -62,11 +62,11 @@ and closes the popup.
 1. **Which panes are agents.** `tmux list-panes -a` gives every pane's shell
    PID; the process tree under it is searched for `claude` (native binary or
    `node …/claude-code/cli.js`).
-2. **What the agent is doing.** The bottom of the pane is read with
-   `capture-pane`:
-   - permission/question prompts (`Do you want to…`, `❯ 1. Yes`, `Enter to select`) → **NEEDS INPUT**
-   - spinner line with `esc to interrupt` → **WORKING**
-   - otherwise → **IDLE**
+2. **What the agent is doing.** For Claude Code, the `status` field in
+   `~/.claude/sessions/<pid>.json` (`busy`, `waiting`, `idle`) is used first.
+   If it is missing, the pane title decides: a spinner glyph means
+   **WORKING** and `✳` means **IDLE**. The screen is never parsed. If neither
+   source says, the status is **UNKNOWN** (shown as `-`).
 3. **Hooks (optional, recommended).** With the hooks from `agentop init`
    added to `~/.claude/settings.json`, Claude Code reports `Stop`,
    `Notification`, `UserPromptSubmit` and `SessionEnd` per pane (keyed by
@@ -85,7 +85,6 @@ agentop can read, so there is no percentage.
 ## Adding other agents
 
 Each agent is a struct implementing the `Agent` trait in `src/agents/`
-(see `claude.rs`): a process matcher, the screen strings that mean "needs
-input" and "working", and optionally `context_usage` and `init_text`. Add the
+(see `claude.rs`): a process matcher, a `classify` method that returns the status, and optionally `context_usage` and `init_text`. Add the
 file, then add one line to `AGENTS` in `src/agents/mod.rs`. Nothing else
 changes.

@@ -19,6 +19,8 @@ pub enum Status {
     Done,
     /// Sitting at an empty prompt.
     Idle,
+    /// No reliable signal. Shown instead of a guess.
+    Unknown,
 }
 
 impl Status {
@@ -28,6 +30,7 @@ impl Status {
             Status::Working => "WORKING",
             Status::Done => "DONE",
             Status::Idle => "IDLE",
+            Status::Unknown => "UNKNOWN",
         }
     }
 }
@@ -52,16 +55,9 @@ pub trait Agent: Sync {
     /// Whether a process command line (argv joined by spaces) is this agent.
     fn matches(&self, cmdline: &str) -> bool;
 
-    /// Screen fragments meaning the agent is waiting on the user.
-    fn needs_input(&self) -> &'static [&'static str];
-
-    /// Screen fragments (lowercase) meaning the agent is busy.
-    fn working(&self) -> &'static [&'static str];
-
-    /// Status and one line of detail from the visible screen.
-    fn classify(&self, screen: &[String]) -> (Status, String) {
-        classify_by_patterns(self.needs_input(), self.working(), screen)
-    }
+    /// Status and one line of detail, from the agent's own session record
+    /// or, failing that, the pane title. Returns `Unknown` when neither says.
+    fn classify(&self, proc: &ProcessInfo, title: &str) -> (Status, String);
 
     /// Context usage of the session behind `proc`, if the agent exposes it.
     fn context_usage(&self, _proc: &ProcessInfo) -> Option<ContextUsage> {
@@ -75,76 +71,3 @@ pub trait Agent: Sync {
 }
 
 pub static AGENTS: &[&dyn Agent] = &[&claude::Claude];
-
-/// Clean the box-drawing/indicator decoration off a screen line.
-fn tidy(line: &str) -> String {
-    line.trim_matches(|c: char| c.is_whitespace() || "│╭╮╰╯─>❯·".contains(c))
-        .to_string()
-}
-
-fn classify_by_patterns(
-    needs_input: &[&str],
-    working: &[&str],
-    screen: &[String],
-) -> (Status, String) {
-    // Only the bottom of the screen reflects current state; older output
-    // further up can contain stale prompts.
-    let tail_start = screen.len().saturating_sub(30);
-    let tail = &screen[tail_start..];
-
-    for line in tail.iter().rev() {
-        if needs_input.iter().any(|p| line.contains(p)) {
-            // Prefer the question itself over the option list.
-            let q = tail
-                .iter()
-                .rev()
-                .find(|l| {
-                    l.contains("Do you want")
-                        || l.contains("Would you like")
-                        || l.trim_end().ends_with('?')
-                })
-                .unwrap_or(line);
-            return (Status::NeedsInput, tidy(q));
-        }
-    }
-    let lower: Vec<String> = tail.iter().map(|l| l.to_lowercase()).collect();
-    for (i, line) in lower.iter().enumerate().rev() {
-        if working.iter().any(|p| line.contains(p)) {
-            return (Status::Working, tidy(&tail[i]));
-        }
-    }
-    (Status::Idle, String::new())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lines(s: &str) -> Vec<String> {
-        s.lines().map(String::from).collect()
-    }
-
-    #[test]
-    fn classifies_permission_prompt() {
-        let s = lines(
-            "● Bash(rm -rf build)\n╭──────╮\n│ Bash command\n│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No\n╰──────╯",
-        );
-        let (st, d) = claude::Claude.classify(&s);
-        assert_eq!(st, Status::NeedsInput);
-        assert_eq!(d, "Do you want to proceed?");
-    }
-
-    #[test]
-    fn classifies_working() {
-        let s = lines("✻ Thinking… (12s · ↑ 1.2k tokens · esc to interrupt)\n\n> \n");
-        let (st, d) = claude::Claude.classify(&s);
-        assert_eq!(st, Status::Working);
-        assert!(d.starts_with("✻ Thinking"));
-    }
-
-    #[test]
-    fn classifies_idle() {
-        let s = lines("● Done. All tests pass.\n╭────╮\n│ >  │\n╰────╯\n  ? for shortcuts");
-        assert_eq!(claude::Claude.classify(&s).0, Status::Idle);
-    }
-}

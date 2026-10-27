@@ -193,7 +193,7 @@ fn status_style(s: Status) -> Style {
         Status::NeedsInput => Style::new().fg(Color::Black).bg(Color::Yellow).bold(),
         Status::Working => Style::new().fg(Color::Cyan).bold(),
         Status::Done => Style::new().fg(Color::Green).bold(),
-        Status::Idle => Style::new().fg(Color::DarkGray),
+        Status::Idle | Status::Unknown => Style::new().fg(Color::DarkGray),
     }
 }
 
@@ -203,6 +203,7 @@ fn status_icon(s: Status) -> &'static str {
         Status::Working => "◐",
         Status::Done => "✓",
         Status::Idle => "○",
+        Status::Unknown => "-",
     }
 }
 
@@ -242,6 +243,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Status::Working,
         Status::Done,
         Status::Idle,
+        Status::Unknown,
     ] {
         let n = count(s);
         if n > 0 {

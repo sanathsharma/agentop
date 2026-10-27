@@ -1,12 +1,17 @@
 //! Claude Code.
 //!
+//! Status comes from the per-pid session file (`status` is `busy`, `waiting`
+//! or `idle`). When that is missing or unrecognized, the pane title decides:
+//! Claude Code prefixes it with a spinner glyph while working and `✳ ` when
+//! idle. The screen contents are never used. Anything else is `Unknown`.
+//!
 //! Context usage comes from the session transcript. Claude Code records the
 //! running session at `~/.claude/sessions/<pid>.json` (session id and cwd),
 //! and the transcript at `~/.claude/projects/<cwd with non-alphanumerics as
 //! '-'>/<session id>.jsonl`. The last assistant message there carries a
 //! `usage` block. The window size is not recorded, so only used tokens are shown.
 
-use super::{Agent, ContextUsage, ProcessInfo};
+use super::{Agent, ContextUsage, ProcessInfo, Status};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -25,18 +30,15 @@ impl Agent for Claude {
         is_claude(args)
     }
 
-    fn needs_input(&self) -> &'static [&'static str] {
-        &[
-            "Do you want to",
-            "Would you like to",
-            "Enter to select",
-            "Enter to confirm",
-            "❯ 1. Yes",
-        ]
-    }
-
-    fn working(&self) -> &'static [&'static str] {
-        &["esc to interrupt", "ctrl+c to interrupt"]
+    fn classify(&self, proc: &ProcessInfo, title: &str) -> (Status, String) {
+        let session = std::fs::read_to_string(session_path(proc.pid)).ok();
+        let session = session.as_deref().and_then(parse_session_file);
+        if let Some(s) = session
+            && let Some(hit) = status_from_session(&s)
+        {
+            return hit;
+        }
+        status_from_title(title)
     }
 
     fn context_usage(&self, proc: &ProcessInfo) -> Option<ContextUsage> {
@@ -62,6 +64,40 @@ fn is_claude(args: &str) -> bool {
         && it.any(|a| a.contains("claude-code") || a.ends_with("/claude"))
 }
 
+fn session_path(pid: u32) -> PathBuf {
+    config_dir()
+        .unwrap_or_default()
+        .join("sessions")
+        .join(format!("{pid}.json"))
+}
+
+fn status_from_session(s: &SessionFile) -> Option<(Status, String)> {
+    match s.status.as_deref()? {
+        "busy" => Some((Status::Working, String::new())),
+        "waiting" => Some((
+            Status::NeedsInput,
+            s.waiting_for.clone().unwrap_or_default(),
+        )),
+        "idle" => Some((Status::Idle, String::new())),
+        _ => None,
+    }
+}
+
+/// Spinner glyphs (braille, or half circles from 2.1.228) mean working and
+/// `✳` means idle. The text after the glyph is the session name.
+fn status_from_title(title: &str) -> (Status, String) {
+    let mut chars = title.chars();
+    let (Some(glyph), Some(' ')) = (chars.next(), chars.next()) else {
+        return (Status::Unknown, String::new());
+    };
+    let status = match glyph {
+        '\u{2800}'..='\u{28FF}' | '\u{25D0}'..='\u{25D3}' => Status::Working,
+        '\u{2733}' => Status::Idle,
+        _ => return (Status::Unknown, String::new()),
+    };
+    (status, chars.as_str().to_string())
+}
+
 fn config_dir() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
@@ -79,6 +115,8 @@ fn project_dir_name(cwd: &str) -> String {
 struct SessionFile {
     session_id: String,
     cwd: String,
+    status: Option<String>,
+    waiting_for: Option<String>,
 }
 
 fn parse_session_file(json: &str) -> Option<SessionFile> {
@@ -86,6 +124,8 @@ fn parse_session_file(json: &str) -> Option<SessionFile> {
     Some(SessionFile {
         session_id: v["sessionId"].as_str()?.to_string(),
         cwd: v["cwd"].as_str()?.to_string(),
+        status: v["status"].as_str().map(String::from),
+        waiting_for: v["waitingFor"].as_str().map(String::from),
     })
 }
 
@@ -212,6 +252,44 @@ mod tests {
         assert_eq!(s.session_id, "abc-123");
         assert_eq!(s.cwd, "/home/u/x");
         assert!(parse_session_file("{}").is_none());
+    }
+
+    fn session(status: &str) -> SessionFile {
+        parse_session_file(&format!(
+            r#"{{"sessionId":"a","cwd":"/x","status":"{status}","waitingFor":"input needed"}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn maps_session_status() {
+        assert_eq!(
+            status_from_session(&session("busy")).unwrap().0,
+            Status::Working
+        );
+        let (st, d) = status_from_session(&session("waiting")).unwrap();
+        assert_eq!(st, Status::NeedsInput);
+        assert_eq!(d, "input needed");
+        assert_eq!(
+            status_from_session(&session("idle")).unwrap().0,
+            Status::Idle
+        );
+        assert!(status_from_session(&session("other")).is_none());
+    }
+
+    #[test]
+    fn maps_title() {
+        assert_eq!(
+            status_from_title("⠋ Fix bug"),
+            (Status::Working, "Fix bug".into())
+        );
+        assert_eq!(status_from_title("◐ Fix bug").0, Status::Working);
+        assert_eq!(
+            status_from_title("✳ Fix bug"),
+            (Status::Idle, "Fix bug".into())
+        );
+        assert_eq!(status_from_title("~/code/x").0, Status::Unknown);
+        assert_eq!(status_from_title("").0, Status::Unknown);
     }
 
     #[test]

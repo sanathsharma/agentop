@@ -98,6 +98,6 @@ fn init_text() -> String {
 const TMUX_TEXT: &str = r#"# tmux: add to ~/.tmux.conf, then `tmux source ~/.tmux.conf`
 #    prefix + a : open the dashboard in a popup (Enter switches, popup closes)
 #    prefix + A : jump straight to the next agent waiting for input
-bind-key a display-popup -E -w 90% -h 75% "agentop"
-bind-key A run-shell "agentop next"
+bind "a" display-popup -E -w 90% -h 90% "agentop"
+bind "A" run-shell "agentop next"
 "#;

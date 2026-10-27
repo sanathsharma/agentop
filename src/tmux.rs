@@ -15,6 +15,7 @@ pub struct Pane {
     pub pid: u32,
     pub current_command: String,
     pub current_path: String,
+    pub title: String,
     pub session_attached: bool,
 }
 
@@ -48,6 +49,7 @@ pub fn list_panes() -> Result<Vec<Pane>> {
         "#{pane_pid}",
         "#{pane_current_command}",
         "#{pane_current_path}",
+        "#{pane_title}",
         "#{session_attached}",
     ];
     let fmt = fields.join(SEP);
@@ -73,7 +75,8 @@ pub fn list_panes() -> Result<Vec<Pane>> {
             pid: f[5].parse().unwrap_or(0),
             current_command: f[6].to_string(),
             current_path: f[7].to_string(),
-            session_attached: f[8] != "0",
+            title: f[8].to_string(),
+            session_attached: f[9] != "0",
         });
     }
     Ok(panes)
