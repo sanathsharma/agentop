@@ -1,5 +1,6 @@
 mod agents;
 mod args;
+mod notify;
 mod session;
 mod state;
 mod tmux;
@@ -23,9 +24,25 @@ fn main() -> Result<()> {
         }
         Some(("list", sub)) => list(sub.get_flag("json")),
         Some(("next", _)) => next(),
-        Some(("hook", _)) => {
+        Some(("hook", sub)) => {
             // Hooks must never break the agent: swallow errors.
-            let _ = state::record_from_stdin();
+            if let Ok(Some((pane, st))) = state::record_from_stdin() {
+                let mode = sub
+                    .get_one::<String>("notify")
+                    .map_or(notify::Mode::Off, |m| notify::Mode::parse(m));
+                if let Some(kind) = notify::classify(mode, &st.event)
+                    && let Some(info) = notify::pane_info(&pane)
+                    && !info.in_view
+                {
+                    notify::notify(
+                        kind,
+                        "claude",
+                        &info.session,
+                        st.message.as_deref().unwrap_or(""),
+                        sub.get_flag("sound"),
+                    );
+                }
+            }
             Ok(())
         }
         Some(("init", _)) => {

@@ -55,9 +55,10 @@ pub fn load_all() -> HashMap<String, HookState> {
 
 /// Entry point for `agentop hook`: reads the hook JSON from stdin and records it.
 /// Never fails loudly — a broken hook must not disturb the agent.
-pub fn record_from_stdin() -> Result<()> {
+/// Returns the pane and recorded state so the caller can notify.
+pub fn record_from_stdin() -> Result<Option<(String, HookState)>> {
     let Some(pane) = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty()) else {
-        return Ok(()); // not running inside tmux; nothing to track
+        return Ok(None); // not running inside tmux; nothing to track
     };
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok();
@@ -68,7 +69,7 @@ pub fn record_from_stdin() -> Result<()> {
 
     if event == "SessionEnd" {
         let _ = std::fs::remove_file(path);
-        return Ok(());
+        return Ok(None);
     }
 
     let message = match event.as_str() {
@@ -89,7 +90,7 @@ pub fn record_from_stdin() -> Result<()> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec(&st)?)?;
     std::fs::rename(tmp, path)?;
-    Ok(())
+    Ok(Some((pane, st)))
 }
 
 /// Remove state files for panes that no longer exist.

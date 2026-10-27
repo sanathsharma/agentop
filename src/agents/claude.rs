@@ -209,6 +209,8 @@ fn last_usage(transcript: &str) -> Option<UsageSample> {
 const INIT_TEXT: &str = r#"# Claude Code (optional, recommended): merge into ~/.claude/settings.json
 #    Lets agentop show DONE vs IDLE, the age of the last event, and catch
 #    permission requests even when the prompt is scrolled off screen.
+#    Optional: add `--notify` (or `--notify=input`) and `--sound` to the
+#    Notification and Stop commands for desktop notifications and sounds.
 {
   "hooks": {
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],

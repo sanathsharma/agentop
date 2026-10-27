@@ -43,7 +43,22 @@ pub fn get_matches() -> ArgMatches {
         .subcommand(Command::new("next").about("Jump straight to the next agent that needs input"))
         .subcommand(
             Command::new("hook")
-                .about("Claude Code hook handler. Reads hook JSON on stdin; not for direct use"),
+                .about("Claude Code hook handler. Reads hook JSON on stdin; not for direct use")
+                .arg(
+                    Arg::new("notify")
+                        .long("notify")
+                        .help("Send a desktop notification: `input` (needs input only) or `all` (also when a turn finishes)")
+                        .value_name("MODE")
+                        .num_args(0..=1)
+                        .default_missing_value("all")
+                        .value_parser(["input", "all"]),
+                )
+                .arg(
+                    Arg::new("sound")
+                        .long("sound")
+                        .help("Play a sound with each notification")
+                        .action(ArgAction::SetTrue),
+                ),
         )
         .subcommand(
             Command::new("init").about("Print the tmux bindings and agent hook configs to install"),
