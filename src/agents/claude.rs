@@ -1,0 +1,236 @@
+//! Claude Code.
+//!
+//! Context usage comes from the session transcript. Claude Code records the
+//! running session at `~/.claude/sessions/<pid>.json` (session id and cwd),
+//! and the transcript at `~/.claude/projects/<cwd with non-alphanumerics as
+//! '-'>/<session id>.jsonl`. The last assistant message there carries a
+//! `usage` block. The window size is not recorded, so only used tokens are shown.
+
+use super::{Agent, ContextUsage, ProcessInfo};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+
+/// Transcript lines can be large (file reads), so look at the last megabyte.
+const TAIL_BYTES: u64 = 1 << 20;
+
+pub struct Claude;
+
+impl Agent for Claude {
+    fn name(&self) -> &'static str {
+        "claude"
+    }
+
+    fn matches(&self, args: &str) -> bool {
+        is_claude(args)
+    }
+
+    fn needs_input(&self) -> &'static [&'static str] {
+        &[
+            "Do you want to",
+            "Would you like to",
+            "Enter to select",
+            "Enter to confirm",
+            "❯ 1. Yes",
+        ]
+    }
+
+    fn working(&self) -> &'static [&'static str] {
+        &["esc to interrupt", "ctrl+c to interrupt"]
+    }
+
+    fn context_usage(&self, proc: &ProcessInfo) -> Option<ContextUsage> {
+        let transcript = locate_transcript(&config_dir()?, proc)?;
+        let sample = last_usage(&read_tail(&transcript)?)?;
+        Some(ContextUsage { used: sample.used })
+    }
+
+    fn init_text(&self) -> Option<&'static str> {
+        Some(INIT_TEXT)
+    }
+}
+
+fn is_claude(args: &str) -> bool {
+    let mut it = args.split_whitespace();
+    let Some(argv0) = it.next() else { return false };
+    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    if base == "claude" {
+        return true;
+    }
+    // npm install runs as `node /…/@anthropic-ai/claude-code/cli.js`
+    matches!(base, "node" | "bun" | "deno")
+        && it.any(|a| a.contains("claude-code") || a.ends_with("/claude"))
+}
+
+fn config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")))
+}
+
+/// Claude Code names a project directory after the cwd, replacing every
+/// character that is not an ASCII letter or digit with `-`.
+fn project_dir_name(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+struct SessionFile {
+    session_id: String,
+    cwd: String,
+}
+
+fn parse_session_file(json: &str) -> Option<SessionFile> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    Some(SessionFile {
+        session_id: v["sessionId"].as_str()?.to_string(),
+        cwd: v["cwd"].as_str()?.to_string(),
+    })
+}
+
+fn newest_transcript(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+}
+
+/// Find the transcript for the claude process. The per-pid session file is
+/// exact. Without it, the newest transcript for the pane's cwd is a guess.
+fn locate_transcript(config: &Path, proc: &ProcessInfo) -> Option<PathBuf> {
+    let projects = config.join("projects");
+    if let Ok(json) =
+        std::fs::read_to_string(config.join("sessions").join(format!("{}.json", proc.pid)))
+        && let Some(s) = parse_session_file(&json)
+    {
+        let path = projects
+            .join(project_dir_name(&s.cwd))
+            .join(format!("{}.jsonl", s.session_id));
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    newest_transcript(&projects.join(project_dir_name(&proc.cwd)))
+}
+
+fn read_tail(path: &Path) -> Option<String> {
+    let mut f = File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL_BYTES);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    if start > 0 {
+        // The first line is probably cut in half.
+        return text.split_once('\n').map(|(_, rest)| rest.to_string());
+    }
+    Some(text)
+}
+
+struct UsageSample {
+    used: u64,
+}
+
+/// Tokens in the context after the most recent main-thread assistant message:
+/// fresh input plus cache creation plus cache reads.
+fn last_usage(transcript: &str) -> Option<UsageSample> {
+    for line in transcript.lines().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v["isSidechain"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let msg = &v["message"];
+        if msg["role"].as_str() != Some("assistant") || msg["model"].as_str() == Some("<synthetic>")
+        {
+            continue;
+        }
+        let usage = &msg["usage"];
+        let used: u64 = [
+            "input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ]
+        .iter()
+        .filter_map(|k| usage[*k].as_u64())
+        .sum();
+        if used > 0 {
+            return Some(UsageSample { used });
+        }
+    }
+    None
+}
+
+const INIT_TEXT: &str = r#"# Claude Code (optional, recommended): merge into ~/.claude/settings.json
+#    Lets agentop show DONE vs IDLE, the age of the last event, and catch
+#    permission requests even when the prompt is scrolled off screen.
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],
+    "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }]
+  }
+}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_claude_processes() {
+        assert!(is_claude("claude"));
+        assert!(is_claude("/usr/local/bin/claude --resume"));
+        assert!(is_claude(
+            "node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+        ));
+        assert!(!is_claude("vim claude.md"));
+        assert!(!is_claude("node server.js"));
+        assert!(!is_claude("agentop"));
+    }
+
+    #[test]
+    fn encodes_project_dir() {
+        assert_eq!(
+            project_dir_name("/home/u/code/dotfiles.git/dotfiles--main"),
+            "-home-u-code-dotfiles-git-dotfiles--main"
+        );
+    }
+
+    #[test]
+    fn parses_session_file() {
+        let s = parse_session_file(
+            r#"{"pid":1,"sessionId":"abc-123","cwd":"/home/u/x","status":"idle"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.session_id, "abc-123");
+        assert_eq!(s.cwd, "/home/u/x");
+        assert!(parse_session_file("{}").is_none());
+    }
+
+    #[test]
+    fn sums_last_main_thread_usage() {
+        let t = concat!(
+            r#"{"message":{"role":"assistant","model":"claude-sonnet-5-5","usage":{"input_tokens":1,"cache_creation_input_tokens":10,"cache_read_input_tokens":100}}}"#,
+            "\n",
+            r#"{"message":{"role":"assistant","model":"claude-sonnet-5-5","usage":{"input_tokens":2,"cache_creation_input_tokens":612,"cache_read_input_tokens":50790,"output_tokens":386}}}"#,
+            "\n",
+            r#"{"isSidechain":true,"message":{"role":"assistant","model":"claude-haiku-5-5","usage":{"input_tokens":999999}}}"#,
+            "\n",
+            r#"{"message":{"role":"assistant","model":"<synthetic>","usage":{"input_tokens":0}}}"#,
+            "\n",
+            r#"{"message":{"role":"user","content":"hi"}}"#,
+            "\n",
+            "not json at all\n",
+        );
+        let s = last_usage(t).unwrap();
+        assert_eq!(s.used, 51_404);
+        assert!(last_usage("").is_none());
+    }
+}
