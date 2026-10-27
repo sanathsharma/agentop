@@ -52,10 +52,17 @@ agentop init          # print config snippets
 ```tmux
 bind "a" display-popup -E -w 90% -h 90% "agentop"    # prefix+a: dashboard popup
 bind "A" run-shell "agentop next"                    # prefix+A: jump to next waiting agent
+set -g focus-events on                               # required for notification focus detection
 ```
 
 From the popup, Enter switches your client to the target session/window/pane
 and closes the popup.
+
+`focus-events` is required for `--notify`. agentop skips a notification only
+when the agent's pane is active and its terminal window has focus, and tmux
+reports window focus only with this option on (the terminal must also send
+focus events; most do). With it off, tmux never reports focus, so agentop
+treats you as away and notifies even while you are looking at the pane.
 
 ## How status is detected
 

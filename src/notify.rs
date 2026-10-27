@@ -72,8 +72,10 @@ pub fn classify(mode: Mode, event: &str) -> Option<Kind> {
 
 pub struct PaneInfo {
     pub session: String,
-    /// The pane is the active pane of an attached tmux client, so the
-    /// user is already looking at it.
+    /// The pane is the active pane of its window, and a client of its
+    /// session has terminal focus, so the user is already looking at it.
+    /// Focus needs `set -g focus-events on`. Without it no client reports
+    /// focus and this is always false, so notifications still fire.
     pub in_view: bool,
 }
 
@@ -83,15 +85,27 @@ pub fn pane_info(pane: &str) -> Option<PaneInfo> {
         "-p",
         "-t",
         pane,
-        "#{pane_active} #{window_active} #{session_attached} #{session_title}",
+        "#{pane_active} #{window_active} #{session_id} #{session_name}",
     ])
     .ok()?;
     let mut f = out.trim_end().splitn(4, ' ');
-    let (active, window, attached, session) = (f.next()?, f.next()?, f.next()?, f.next()?);
+    let (active, window, id, session) = (f.next()?, f.next()?, f.next()?, f.next()?);
+    let in_view = active == "1" && window == "1" && session_focused(id);
     Some(PaneInfo {
         session: session.to_string(),
-        in_view: active == "1" && window == "1" && attached != "0",
+        in_view,
     })
+}
+
+/// True when any client attached to the session reports terminal focus.
+fn session_focused(session_id: &str) -> bool {
+    tmux::tmux(&["list-clients", "-t", session_id, "-F", "#{client_flags}"])
+        .map(|out| out.lines().any(has_focus_flag))
+        .unwrap_or(false)
+}
+
+fn has_focus_flag(flags: &str) -> bool {
+    flags.split(',').any(|f| f == "focused")
 }
 
 /// The title names the agent and its tmux session. The body is the agent's
@@ -201,5 +215,17 @@ mod tests {
         assert_eq!(Mode::parse("input"), Mode::Input);
         assert_eq!(Mode::parse("all"), Mode::All);
         assert_eq!(Mode::parse("bogus"), Mode::Off);
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn focus_flag_is_matched_exactly() {
+        assert!(has_focus_flag("attached,focused,UTF-8"));
+        assert!(!has_focus_flag("attached,UTF-8"));
+        assert!(!has_focus_flag("unfocused"));
     }
 }

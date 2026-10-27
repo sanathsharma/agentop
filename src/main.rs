@@ -118,4 +118,7 @@ const TMUX_TEXT: &str = r#"# tmux: add to ~/.tmux.conf, then `tmux source ~/.tmu
 #    prefix + A : jump straight to the next agent waiting for input
 bind "a" display-popup -E -w 90% -h 90% "agentop"
 bind "A" run-shell "agentop next"
+# Needed for notifications: lets tmux know when the terminal window has focus,
+# so agentop only skips a notification while you are actually looking at it.
+set -g focus-events on
 "#;
