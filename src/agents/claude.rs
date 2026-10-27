@@ -214,8 +214,8 @@ const INIT_TEXT: &str = r#"# Claude Code (optional, recommended): merge into ~/.
 {
   "hooks": {
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],
-    "Notification":     [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],
-    "Stop":             [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "agentop hook --notify --sound" }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "agentop hook --notify --sound" }] }],
     "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "agentop hook" }] }]
   }
 }
