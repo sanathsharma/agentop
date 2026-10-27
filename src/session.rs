@@ -9,7 +9,7 @@
 //! event per pane, which lets us tell "finished a turn" apart from "idle" and
 //! show how long ago it happened. See `state.rs`.
 
-use crate::agents::{AGENTS, Agent, ContextUsage, ProcessInfo};
+use crate::agents::{AGENTS, Agent, ContextUsage, ProcessInfo, SessionTitle};
 use crate::state::{self, HookState};
 use crate::tmux::{self, Pane};
 use anyhow::Result;
@@ -27,6 +27,8 @@ pub struct AgentSession {
     pub session: String,
     pub window_index: u32,
     pub window_name: String,
+    /// Title of the agent session, see `CONTEXT.md`.
+    pub session_title: Option<SessionTitle>,
     pub pane_index: u32,
     pub cwd: String,
     pub session_attached: bool,
@@ -176,6 +178,7 @@ pub fn scan() -> Result<Vec<AgentSession>> {
             cwd: p.current_path.clone(),
         };
         let (status, detail) = agent.classify(&proc, &p.title);
+        let session_title = agent.session_title(&proc, &p.title);
         let context = agent.context_usage(&proc);
         let (status, detail, since_secs) = merge_hook(status, detail, hooks.get(&p.id));
 
@@ -185,6 +188,7 @@ pub fn scan() -> Result<Vec<AgentSession>> {
             session: p.session,
             window_index: p.window_index,
             window_name: p.window_name,
+            session_title,
             pane_index: p.pane_index,
             cwd: home_short(&p.current_path),
             session_attached: p.session_attached,
@@ -214,6 +218,13 @@ pub fn fmt_age(secs: u64) -> String {
         3600..=86399 => format!("{}h", secs / 3600),
         _ => format!("{}d", secs / 86400),
     }
+}
+
+pub fn title_text(a: &AgentSession) -> String {
+    a.session_title
+        .as_ref()
+        .map(|n| shorten(&n.text, 24))
+        .unwrap_or_else(|| "-".into())
 }
 
 pub fn context_text(a: &AgentSession) -> String {

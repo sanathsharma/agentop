@@ -83,7 +83,7 @@ pub fn pane_info(pane: &str) -> Option<PaneInfo> {
         "-p",
         "-t",
         pane,
-        "#{pane_active} #{window_active} #{session_attached} #{session_name}",
+        "#{pane_active} #{window_active} #{session_attached} #{session_title}",
     ])
     .ok()?;
     let mut f = out.trim_end().splitn(4, ' ');

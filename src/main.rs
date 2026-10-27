@@ -64,16 +64,17 @@ fn list(json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<12} {:<8} {:<30} {:<5} {:<13} {:<5} DETAIL",
-        "STATUS", "AGENT", "TARGET", "PANE", "CONTEXT", "AGE"
+        "{:<12} {:<8} {:<30} {:<5} {:<24} {:<13} {:<5} DETAIL",
+        "STATUS", "AGENT", "TARGET", "PANE", "TITLE", "CONTEXT", "AGE"
     );
     for a in sessions {
         println!(
-            "{:<12} {:<8} {:<30} {:<5} {:<13} {:<5} {}",
+            "{:<12} {:<8} {:<30} {:<5} {:<24} {:<13} {:<5} {}",
             a.status.label(),
             a.kind,
             a.target(),
             a.pane_id,
+            session::title_text(&a),
             session::context_text(&a),
             a.since_secs
                 .map(session::fmt_age)

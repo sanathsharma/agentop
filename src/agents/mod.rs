@@ -41,6 +41,14 @@ pub struct ContextUsage {
     pub used: u64,
 }
 
+/// The title of an agent session, as the agent shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionTitle {
+    pub text: String,
+    /// A fallback shown until the agent has a real title: a generated name or the pane title.
+    pub placeholder: bool,
+}
+
 /// The process an agent was recognized by.
 pub struct ProcessInfo {
     pub pid: u32,
@@ -58,6 +66,11 @@ pub trait Agent: Sync {
     /// Status and one line of detail, from the agent's own session record
     /// or, failing that, the pane title. Returns `Unknown` when neither says.
     fn classify(&self, proc: &ProcessInfo, title: &str) -> (Status, String);
+
+    /// Title of the session behind `proc`, if the agent has one.
+    fn session_title(&self, _proc: &ProcessInfo, _title: &str) -> Option<SessionTitle> {
+        None
+    }
 
     /// Context usage of the session behind `proc`, if the agent exposes it.
     fn context_usage(&self, _proc: &ProcessInfo) -> Option<ContextUsage> {

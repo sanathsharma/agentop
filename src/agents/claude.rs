@@ -11,7 +11,7 @@
 //! '-'>/<session id>.jsonl`. The last assistant message there carries a
 //! `usage` block. The window size is not recorded, so only used tokens are shown.
 
-use super::{Agent, ContextUsage, ProcessInfo, Status};
+use super::{Agent, ContextUsage, ProcessInfo, SessionTitle, Status};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -38,7 +38,17 @@ impl Agent for Claude {
         {
             return hit;
         }
-        status_from_title(title)
+        (status_from_title(title), String::new())
+    }
+
+    fn session_title(&self, proc: &ProcessInfo, title: &str) -> Option<SessionTitle> {
+        let file = std::fs::read_to_string(session_path(proc.pid)).ok();
+        let file = file.as_deref().and_then(parse_session_file);
+        let ai = config_dir()
+            .and_then(|c| locate_transcript(&c, proc))
+            .and_then(|t| read_tail(&t))
+            .and_then(|tail| last_ai_title(&tail));
+        title_from(file.as_ref(), ai, title)
     }
 
     fn context_usage(&self, proc: &ProcessInfo) -> Option<ContextUsage> {
@@ -84,18 +94,61 @@ fn status_from_session(s: &SessionFile) -> Option<(Status, String)> {
 }
 
 /// Spinner glyphs (braille, or half circles from 2.1.228) mean working and
-/// `✳` means idle. The text after the glyph is the session name.
-fn status_from_title(title: &str) -> (Status, String) {
+/// `✳` means idle.
+fn status_from_title(title: &str) -> Status {
+    match title_parts(title) {
+        Some(('\u{2800}'..='\u{28FF}' | '\u{25D0}'..='\u{25D3}', _)) => Status::Working,
+        Some(('\u{2733}', _)) => Status::Idle,
+        _ => Status::Unknown,
+    }
+}
+
+/// Splits a pane title of the form `<glyph> <text>`.
+fn title_parts(title: &str) -> Option<(char, &str)> {
     let mut chars = title.chars();
-    let (Some(glyph), Some(' ')) = (chars.next(), chars.next()) else {
-        return (Status::Unknown, String::new());
+    let glyph = chars.next()?;
+    (chars.next()? == ' ').then_some((glyph, chars.as_str()))
+}
+
+/// A name the user chose with `/rename` wins. Next comes the title Claude
+/// generated from the conversation, then the generated name from the session
+/// file, then the pane title. Only the last two are placeholders.
+fn title_from(file: Option<&SessionFile>, ai: Option<String>, title: &str) -> Option<SessionTitle> {
+    let file_name = file
+        .and_then(|f| Some((f.name.as_deref().filter(|n| !n.is_empty())?, f)))
+        .map(|(n, f)| (n.to_string(), f.name_source.as_deref() == Some("derived")));
+    if let Some((text, false)) = file_name {
+        return Some(SessionTitle {
+            text,
+            placeholder: false,
+        });
+    }
+    let placeholder = |text: String| SessionTitle {
+        text,
+        placeholder: true,
     };
-    let status = match glyph {
-        '\u{2800}'..='\u{28FF}' | '\u{25D0}'..='\u{25D3}' => Status::Working,
-        '\u{2733}' => Status::Idle,
-        _ => return (Status::Unknown, String::new()),
-    };
-    (status, chars.as_str().to_string())
+    if let Some(text) = ai {
+        return Some(SessionTitle {
+            text,
+            placeholder: false,
+        });
+    }
+    if let Some((text, _)) = file_name {
+        return Some(placeholder(text));
+    }
+    let (_, text) = title_parts(title)?;
+    (!text.is_empty()).then(|| placeholder(text.to_string()))
+}
+
+/// The newest `ai-title` record in the transcript tail.
+fn last_ai_title(tail: &str) -> Option<String> {
+    tail.lines()
+        .rev()
+        .filter(|l| l.contains("\"ai-title\""))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["type"] == "ai-title")
+        .and_then(|v| v["aiTitle"].as_str().map(String::from))
+        .filter(|t| !t.is_empty())
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -117,6 +170,8 @@ struct SessionFile {
     cwd: String,
     status: Option<String>,
     waiting_for: Option<String>,
+    name: Option<String>,
+    name_source: Option<String>,
 }
 
 fn parse_session_file(json: &str) -> Option<SessionFile> {
@@ -126,6 +181,8 @@ fn parse_session_file(json: &str) -> Option<SessionFile> {
         cwd: v["cwd"].as_str()?.to_string(),
         status: v["status"].as_str().map(String::from),
         waiting_for: v["waitingFor"].as_str().map(String::from),
+        name: v["name"].as_str().map(String::from),
+        name_source: v["nameSource"].as_str().map(String::from),
     })
 }
 
@@ -281,17 +338,49 @@ mod tests {
 
     #[test]
     fn maps_title() {
-        assert_eq!(
-            status_from_title("⠋ Fix bug"),
-            (Status::Working, "Fix bug".into())
+        assert_eq!(status_from_title("⠋ Fix bug"), Status::Working);
+        assert_eq!(status_from_title("◐ Fix bug"), Status::Working);
+        assert_eq!(status_from_title("✳ Fix bug"), Status::Idle);
+        assert_eq!(status_from_title("~/code/x"), Status::Unknown);
+        assert_eq!(status_from_title(""), Status::Unknown);
+    }
+
+    #[test]
+    fn picks_session_title() {
+        let file = |src: &str| {
+            parse_session_file(&format!(
+                r#"{{"sessionId":"a","cwd":"/x","name":"n","nameSource":"{src}"}}"#
+            ))
+            .unwrap()
+        };
+        let ai = || Some("Fix bug".to_string());
+
+        let t = title_from(Some(&file("user")), ai(), "✳ Other").unwrap();
+        assert_eq!((t.text.as_str(), t.placeholder), ("n", false));
+
+        let t = title_from(Some(&file("derived")), ai(), "").unwrap();
+        assert_eq!((t.text.as_str(), t.placeholder), ("Fix bug", false));
+
+        let t = title_from(Some(&file("derived")), None, "✳ Other").unwrap();
+        assert_eq!(t.text, "n");
+
+        let t = title_from(None, None, "✳ Other").unwrap();
+        assert_eq!(t.text, "Other");
+        assert!(title_from(None, None, "~/code/x").is_none());
+    }
+
+    #[test]
+    fn finds_last_ai_title() {
+        let t = concat!(
+            r#"{"type":"ai-title","aiTitle":"Old"}"#,
+            "\n",
+            r#"{"type":"user","message":{"content":"ai-title"}}"#,
+            "\n",
+            r#"{"type":"ai-title","aiTitle":"New"}"#,
+            "\n",
         );
-        assert_eq!(status_from_title("◐ Fix bug").0, Status::Working);
-        assert_eq!(
-            status_from_title("✳ Fix bug"),
-            (Status::Idle, "Fix bug".into())
-        );
-        assert_eq!(status_from_title("~/code/x").0, Status::Unknown);
-        assert_eq!(status_from_title("").0, Status::Unknown);
+        assert_eq!(last_ai_title(t).as_deref(), Some("New"));
+        assert!(last_ai_title("").is_none());
     }
 
     #[test]
