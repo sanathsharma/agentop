@@ -17,6 +17,9 @@ pub struct HookState {
     pub ts: u64,
     #[serde(default)]
     pub message: Option<String>,
+    /// Set on `Notification` events, e.g. `permission_prompt` or `idle_prompt`.
+    #[serde(default)]
+    pub notification_type: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
 }
@@ -83,6 +86,7 @@ pub fn record_from_stdin() -> Result<Option<(String, HookState)>> {
         event,
         ts: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         message,
+        notification_type: v["notification_type"].as_str().map(String::from),
         session_id: v["session_id"].as_str().map(String::from),
     };
     std::fs::create_dir_all(dir()).context("creating state dir")?;

@@ -61,9 +61,12 @@ impl Kind {
 }
 
 /// Which notification, if any, a hook event produces under `mode`.
-pub fn classify(mode: Mode, event: &str) -> Option<Kind> {
+/// The `idle_prompt` notification, sent after a finished agent sits idle,
+/// never notifies.
+pub fn classify(mode: Mode, event: &str, notification_type: Option<&str>) -> Option<Kind> {
     match (mode, event) {
         (Mode::Off, _) => None,
+        (_, "Notification") if notification_type == Some("idle_prompt") => None,
         (_, "Notification") => Some(Kind::NeedsInput),
         (Mode::All, "Stop") => Some(Kind::Done),
         _ => None,
@@ -200,14 +203,25 @@ mod tests {
 
     #[test]
     fn classifies_events_by_mode() {
-        assert_eq!(classify(Mode::Off, "Notification"), None);
+        assert_eq!(classify(Mode::Off, "Notification", None), None);
         assert_eq!(
-            classify(Mode::Input, "Notification"),
+            classify(Mode::Input, "Notification", None),
             Some(Kind::NeedsInput)
         );
-        assert_eq!(classify(Mode::Input, "Stop"), None);
-        assert_eq!(classify(Mode::All, "Stop"), Some(Kind::Done));
-        assert_eq!(classify(Mode::All, "UserPromptSubmit"), None);
+        assert_eq!(classify(Mode::Input, "Stop", None), None);
+        assert_eq!(classify(Mode::All, "Stop", None), Some(Kind::Done));
+        assert_eq!(classify(Mode::All, "UserPromptSubmit", None), None);
+    }
+
+    #[test]
+    fn idle_prompt_never_notifies() {
+        for mode in [Mode::Input, Mode::All] {
+            assert_eq!(classify(mode, "Notification", Some("idle_prompt")), None);
+            assert_eq!(
+                classify(mode, "Notification", Some("permission_prompt")),
+                Some(Kind::NeedsInput)
+            );
+        }
     }
 
     #[test]

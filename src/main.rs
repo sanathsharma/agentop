@@ -30,7 +30,8 @@ fn main() -> Result<()> {
                 let mode = sub
                     .get_one::<String>("notify")
                     .map_or(notify::Mode::Off, |m| notify::Mode::parse(m));
-                if let Some(kind) = notify::classify(mode, &st.event)
+                if let Some(kind) =
+                    notify::classify(mode, &st.event, st.notification_type.as_deref())
                     && let Some(info) = notify::pane_info(&pane)
                     && !info.in_view
                 {
