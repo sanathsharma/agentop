@@ -1,6 +1,10 @@
 use crate::session::{self, AgentSession, Status, fmt_age};
 use crate::tmux;
 use anyhow::Result;
+use nucleo_matcher::{
+    Config, Matcher, Utf32Str,
+    pattern::{CaseMatching, Normalization, Pattern},
+};
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -28,12 +32,20 @@ enum Exit {
 }
 
 struct App {
+    /// Every scanned agent session.
+    all: Vec<AgentSession>,
+    /// The rows shown in the table: `all` narrowed by `filter`.
     agents: Vec<AgentSession>,
     state: TableState,
     preview: bool,
     error: Option<String>,
     flash: Option<(String, Instant)>,
     last_refresh: Instant,
+    /// Fuzzy query, see `CONTEXT.md`. Empty means no filter.
+    filter: String,
+    /// True while the `/` prompt is open and keys edit `filter`.
+    typing: bool,
+    matcher: Matcher,
 }
 
 impl App {
@@ -42,15 +54,46 @@ impl App {
     }
 
     fn refresh(&mut self) {
-        // Keep the cursor on the same pane even when sorting reshuffles rows.
-        let keep = self.selected().map(|a| a.pane_id.clone());
         match session::scan() {
             Ok(a) => {
-                self.agents = a;
+                self.all = a;
                 self.error = None;
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        self.apply_filter();
+        self.last_refresh = Instant::now();
+    }
+
+    /// Rebuild `agents` from `all` and `filter`.
+    fn apply_filter(&mut self) {
+        // Keep the cursor on the same pane even when sorting reshuffles rows.
+        let keep = self.selected().map(|a| a.pane_id.clone());
+        self.agents = if self.filter.is_empty() {
+            self.all.clone()
+        } else {
+            // Each word must fit inside one column, so a short query can't
+            // spread its letters across unrelated columns.
+            let patterns: Vec<Pattern> = self
+                .filter
+                .split_whitespace()
+                .map(|w| Pattern::parse(w, CaseMatching::Smart, Normalization::Smart))
+                .collect();
+            let mut buf = Vec::new();
+            let matcher = &mut self.matcher;
+            self.all
+                .iter()
+                .filter(|a| {
+                    let fields = filter_fields(a);
+                    patterns.iter().all(|p| {
+                        fields
+                            .iter()
+                            .any(|f| p.score(Utf32Str::new(f, &mut buf), matcher).is_some())
+                    })
+                })
+                .cloned()
+                .collect()
+        };
         let idx = keep
             .and_then(|id| self.agents.iter().position(|a| a.pane_id == id))
             .or(if self.agents.is_empty() {
@@ -61,7 +104,11 @@ impl App {
         let idx = idx.map(|i| i.min(self.agents.len().saturating_sub(1)));
         self.state
             .select(if self.agents.is_empty() { None } else { idx });
-        self.last_refresh = Instant::now();
+    }
+
+    fn set_filter(&mut self, filter: String) {
+        self.filter = filter;
+        self.apply_filter();
     }
 
     fn move_by(&mut self, delta: isize) {
@@ -93,6 +140,17 @@ impl App {
     }
 }
 
+/// The columns the filter matches against, one string each.
+fn filter_fields(a: &AgentSession) -> [&str; 5] {
+    [
+        a.status.label(),
+        &a.session,
+        a.session_title.as_ref().map_or("", |t| t.text.as_str()),
+        &a.cwd,
+        &a.detail,
+    ]
+}
+
 pub fn run(opts: Options) -> Result<()> {
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &opts);
@@ -105,12 +163,16 @@ pub fn run(opts: Options) -> Result<()> {
 
 fn event_loop(terminal: &mut DefaultTerminal, opts: &Options) -> Result<Exit> {
     let mut app = App {
+        all: vec![],
         agents: vec![],
         state: TableState::default(),
         preview: opts.preview,
         error: None,
         flash: None,
         last_refresh: Instant::now(),
+        filter: String::new(),
+        typing: false,
+        matcher: Matcher::new(Config::DEFAULT),
     };
     app.refresh();
 
@@ -125,9 +187,35 @@ fn event_loop(terminal: &mut DefaultTerminal, opts: &Options) -> Result<Exit> {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
+            if app.typing {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(Exit::Quit),
+                    (KeyCode::Esc, _) => {
+                        app.typing = false;
+                        app.set_filter(String::new());
+                    }
+                    (KeyCode::Enter, _) => app.typing = false,
+                    (KeyCode::Down, _) => app.move_by(1),
+                    (KeyCode::Up, _) => app.move_by(-1),
+                    (KeyCode::Backspace, _) => {
+                        let mut f = app.filter.clone();
+                        f.pop();
+                        app.set_filter(f);
+                    }
+                    (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                        let mut f = app.filter.clone();
+                        f.push(c);
+                        app.set_filter(f);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) if !app.filter.is_empty() => app.set_filter(String::new()),
                 (KeyCode::Char('q') | KeyCode::Esc, _) => return Ok(Exit::Quit),
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(Exit::Quit),
+                (KeyCode::Char('/'), _) => app.typing = true,
                 (KeyCode::Down | KeyCode::Char('j'), _) => app.move_by(1),
                 (KeyCode::Up | KeyCode::Char('k'), _) => app.move_by(-1),
                 (KeyCode::Home | KeyCode::Char('g'), _) => app.state.select_first(),
@@ -230,13 +318,18 @@ fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
-    let count = |s| app.agents.iter().filter(|a| a.status == s).count();
+    let count = |s| app.all.iter().filter(|a| a.status == s).count();
+    let shown = if app.filter.is_empty() {
+        app.all.len().to_string()
+    } else {
+        format!("{} / {}", app.agents.len(), app.all.len())
+    };
     let mut spans = vec![
         Span::styled(
             " agentop ",
             Style::new().fg(Color::Black).bg(Color::Blue).bold(),
         ),
-        Span::raw(format!("  {} agents   ", app.agents.len())),
+        Span::raw(format!("  {shown} agents   ")),
     ];
     for s in [
         Status::NeedsInput,
@@ -258,9 +351,14 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
+    let title = if app.filter.is_empty() {
+        " tmux agents ".to_string()
+    } else {
+        format!(" tmux agents  filter: {} ", app.filter)
+    };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(" tmux agents ")
+        .title(title)
         .border_style(Style::new().fg(Color::DarkGray));
 
     if let Some(err) = &app.error {
@@ -268,6 +366,11 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
             Paragraph::new(format!("error: {err}")).red().block(block),
             area,
         );
+        return;
+    }
+    if app.agents.is_empty() && !app.all.is_empty() {
+        let msg = format!("No agents match \"{}\"", app.filter);
+        f.render_widget(Paragraph::new(msg).dark_gray().block(block), area);
         return;
     }
     if app.agents.is_empty() {
@@ -367,6 +470,17 @@ fn draw_preview(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
+    if app.typing {
+        f.render_widget(
+            Line::from(vec![
+                Span::styled(" /", Style::new().fg(Color::Yellow).bold()),
+                Span::raw(app.filter.clone()),
+                Span::styled("▏", Style::new().fg(Color::Yellow)),
+            ]),
+            area,
+        );
+        return;
+    }
     if let Some((msg, at)) = &app.flash
         && at.elapsed() < Duration::from_secs(3)
     {
@@ -385,23 +499,26 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     } else {
         "attach"
     };
-    f.render_widget(
-        Line::from(vec![
-            key("↑↓/jk"),
-            label("move"),
-            key("⏎"),
-            label(enter_label),
-            key("1-9"),
-            label("jump"),
-            key("tab"),
-            label("next waiting"),
-            key("p"),
-            label("preview"),
-            key("r"),
-            label("refresh"),
-            key("q"),
-            label("quit"),
-        ]),
-        area,
-    );
+    let mut spans = vec![
+        key("↑↓/jk"),
+        label("move"),
+        key("/"),
+        label("filter"),
+        key("⏎"),
+        label(enter_label),
+        key("1-9"),
+        label("jump"),
+        key("tab"),
+        label("next waiting"),
+        key("p"),
+        label("preview"),
+        key("r"),
+        label("refresh"),
+        key("q"),
+        label("quit"),
+    ];
+    if !app.filter.is_empty() {
+        spans.extend([key("esc"), label("clear filter")]);
+    }
+    f.render_widget(Line::from(spans), area);
 }

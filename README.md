@@ -31,9 +31,11 @@ agentop init                  # prints the tmux + Claude Code snippets below
 | `Enter` / `l`  | Switch to that pane (attaches if run outside tmux) |
 | `1`–`9`        | Switch to row N directly                           |
 | `Tab` / `n`    | Select the next agent that needs input             |
+| `/`            | Filter rows with a fuzzy query (`Enter` keeps it)  |
 | `p`            | Toggle the pane preview                            |
 | `r`            | Refresh now                                        |
-| `q` / `Esc`    | Quit                                               |
+| `Esc`          | Clear the filter, or quit when none is active      |
+| `q`            | Quit                                               |
 
 ## Commands
 

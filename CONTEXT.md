@@ -19,6 +19,10 @@ _Avoid_: session name, session (alone)
 **Status**:
 What an agent session is doing right now: needs input, working, done, idle, or unknown when no reliable signal exists.
 
+**Filter**:
+A fuzzy query the user types after pressing `/` that narrows the table to the agent sessions whose status, tmux session, title, directory or detail match it. Clearing it restores every row.
+_Avoid_: search, query (alone)
+
 **Context usage**:
 The number of tokens an agent session currently holds in its context, as recorded in the agent's own transcript.
 _Avoid_: memory, tokens (alone)
