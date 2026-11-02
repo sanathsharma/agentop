@@ -58,8 +58,11 @@ bind "A" run-shell "agentop next"                    # prefix+A: jump to next wa
 bind "L" run-shell "agentop last"                    # prefix+L: jump to the last used agent
 set -g focus-events on                               # required for notification focus detection
 
-# Record when each pane was focused (run `agentop init` for the full set of hooks)
+# Record when each pane was last focused
 set-hook -g after-select-pane 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
+set-hook -g after-select-window 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
+set-hook -g client-session-changed 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
+set-hook -g pane-focus-in 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
 ```
 
 The hooks store the focus time in the `@agentop_focus` pane option. The
