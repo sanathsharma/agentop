@@ -46,6 +46,8 @@ struct App {
     /// True while the `/` prompt is open and keys edit `filter`.
     typing: bool,
     matcher: Matcher,
+    /// Pane the dashboard was opened from, see `CONTEXT.md`.
+    origin: Option<String>,
 }
 
 impl App {
@@ -56,7 +58,7 @@ impl App {
     fn refresh(&mut self) {
         match session::scan() {
             Ok(a) => {
-                self.all = a;
+                self.all = session::arrange(a, self.origin.as_deref());
                 self.error = None;
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -173,6 +175,7 @@ fn event_loop(terminal: &mut DefaultTerminal, opts: &Options) -> Result<Exit> {
         filter: String::new(),
         typing: false,
         matcher: Matcher::new(Config::DEFAULT),
+        origin: tmux::inside_tmux().then(tmux::active_pane).flatten(),
     };
     app.refresh();
 

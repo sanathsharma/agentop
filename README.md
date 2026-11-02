@@ -45,6 +45,7 @@ agentop --stay        # don't exit after switching (for a dedicated dashboard wi
 agentop -i 500        # refresh interval in ms
 agentop list [--json] # one-shot output for scripts / status bars
 agentop next          # jump to the first agent waiting for input
+agentop last          # jump back to the agent you used before this one
 agentop hook          # Claude Code hook handler (see below)
 agentop init          # print config snippets
 ```
@@ -54,8 +55,17 @@ agentop init          # print config snippets
 ```tmux
 bind "a" display-popup -E -w 90% -h 90% "agentop"    # prefix+a: dashboard popup
 bind "A" run-shell "agentop next"                    # prefix+A: jump to next waiting agent
+bind "L" run-shell "agentop last"                    # prefix+L: jump to the last used agent
 set -g focus-events on                               # required for notification focus detection
+
+# Record when each pane was focused (run `agentop init` for the full set of hooks)
+set-hook -g after-select-pane 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
 ```
+
+The hooks store the focus time in the `@agentop_focus` pane option. The
+dashboard lists agents that need input first, then the last used agent, then
+the agent you opened the dashboard from, then the rest. Without the hooks the
+dashboard keeps its status order and `agentop last` has nothing to jump to.
 
 From the popup, Enter switches your client to the target session/window/pane
 and closes the popup.

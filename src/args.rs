@@ -42,6 +42,9 @@ pub fn get_matches() -> ArgMatches {
         )
         .subcommand(Command::new("next").about("Jump straight to the next agent that needs input"))
         .subcommand(
+            Command::new("last").about("Jump straight to the agent you used before the current one"),
+        )
+        .subcommand(
             Command::new("hook")
                 .about("Claude Code hook handler. Reads hook JSON on stdin; not for direct use")
                 .arg(

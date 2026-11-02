@@ -40,6 +40,9 @@ pub struct AgentSession {
     pub since_secs: Option<u64>,
     /// `None` when the agent does not expose it or the transcript is missing.
     pub context: Option<ContextUsage>,
+    /// When the pane was last focused, see `Pane::focus`.
+    #[serde(skip)]
+    pub focus: Option<u128>,
     #[serde(skip)]
     pub screen: Vec<String>,
 }
@@ -196,6 +199,7 @@ pub fn scan() -> Result<Vec<AgentSession>> {
             detail: shorten(&detail, 120),
             since_secs,
             context,
+            focus: p.focus,
             screen,
         });
     }
@@ -209,6 +213,40 @@ pub fn scan() -> Result<Vec<AgentSession>> {
             .then(a.pane_index.cmp(&b.pane_index))
     });
     Ok(agents)
+}
+
+/// Order rows for the dashboard: sessions that need input first, then the
+/// last used session and the origin, then everyone else in `scan` order.
+/// A session that needs input is never pinned a second time.
+pub fn arrange(agents: Vec<AgentSession>, origin: Option<&str>) -> Vec<AgentSession> {
+    let (mut head, rest): (Vec<_>, Vec<_>) = agents
+        .into_iter()
+        .partition(|a| a.status == Status::NeedsInput);
+    let last = last_used(&rest, origin).map(|a| a.pane_id.clone());
+    let mut pinned = Vec::new();
+    let mut tail = Vec::new();
+    for a in rest {
+        if Some(&a.pane_id) == last.as_ref() {
+            pinned.insert(0, a);
+        } else if Some(a.pane_id.as_str()) == origin {
+            pinned.push(a);
+        } else {
+            tail.push(a);
+        }
+    }
+    head.extend(pinned);
+    head.extend(tail);
+    head
+}
+
+/// The session focused most recently, ignoring the pane the user is in.
+/// Sessions that were never focused are not candidates.
+pub fn last_used<'a>(agents: &'a [AgentSession], active: Option<&str>) -> Option<&'a AgentSession> {
+    agents
+        .iter()
+        .filter(|a| Some(a.pane_id.as_str()) != active)
+        .filter(|a| a.focus.is_some())
+        .max_by_key(|a| a.focus)
 }
 
 pub fn fmt_age(secs: u64) -> String {
@@ -244,6 +282,79 @@ pub fn fmt_tokens(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agent(pane: &str, status: Status, focus: Option<u128>) -> AgentSession {
+        AgentSession {
+            kind: "claude",
+            pane_id: pane.into(),
+            session: "s".into(),
+            window_index: 0,
+            window_name: String::new(),
+            session_title: None,
+            pane_index: 0,
+            cwd: String::new(),
+            session_attached: true,
+            status,
+            detail: String::new(),
+            since_secs: None,
+            context: None,
+            focus,
+            screen: vec![],
+        }
+    }
+
+    fn ids(v: &[AgentSession]) -> Vec<&str> {
+        v.iter().map(|a| a.pane_id.as_str()).collect()
+    }
+
+    #[test]
+    fn pins_last_used_then_origin_after_needs_input() {
+        let rows = vec![
+            agent("%1", Status::NeedsInput, Some(5)),
+            agent("%2", Status::Working, None),
+            agent("%3", Status::Idle, Some(10)),
+            agent("%4", Status::Idle, Some(30)),
+            agent("%5", Status::Idle, Some(20)),
+        ];
+        let out = arrange(rows, Some("%4"));
+        assert_eq!(ids(&out), ["%1", "%5", "%4", "%2", "%3"]);
+    }
+
+    #[test]
+    fn without_origin_only_last_used_is_pinned() {
+        let rows = vec![
+            agent("%1", Status::Working, Some(1)),
+            agent("%2", Status::Idle, Some(9)),
+            agent("%3", Status::Idle, None),
+        ];
+        assert_eq!(ids(&arrange(rows, None)), ["%2", "%1", "%3"]);
+    }
+
+    #[test]
+    fn needs_input_sessions_are_not_pinned_again() {
+        let rows = vec![
+            agent("%1", Status::NeedsInput, Some(50)),
+            agent("%2", Status::Idle, Some(40)),
+            agent("%3", Status::Idle, Some(10)),
+        ];
+        // %1 is the origin and needs input: it stays in the top group.
+        assert_eq!(ids(&arrange(rows.clone(), Some("%1"))), ["%1", "%2", "%3"]);
+        // %1 needs input and is not the origin: the last used slot goes to %2.
+        assert_eq!(ids(&arrange(rows, Some("%3"))), ["%1", "%2", "%3"]);
+    }
+
+    #[test]
+    fn last_used_skips_the_active_pane_and_unfocused_panes() {
+        let rows = vec![
+            agent("%1", Status::Idle, Some(10)),
+            agent("%2", Status::Idle, Some(30)),
+            agent("%3", Status::NeedsInput, Some(20)),
+            agent("%4", Status::Idle, None),
+        ];
+        assert_eq!(last_used(&rows, Some("%2")).unwrap().pane_id, "%3");
+        assert_eq!(last_used(&rows, None).unwrap().pane_id, "%2");
+        assert!(last_used(&rows[3..], None).is_none());
+    }
 
     #[test]
     fn formats_tokens() {

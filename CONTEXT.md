@@ -26,3 +26,11 @@ _Avoid_: search, query (alone)
 **Context usage**:
 The number of tokens an agent session currently holds in its context, as recorded in the agent's own transcript.
 _Avoid_: memory, tokens (alone)
+
+**Origin**:
+The agent session whose pane the user was in when they opened the dashboard. Not every dashboard opening has one, since the user may start from a pane that runs no agent.
+_Avoid_: current (tmux already uses "current" for the active pane)
+
+**Last used**:
+The agent session the user focused most recently before the origin, or the most recent one overall when there is no origin. Focus means selecting its pane, window or session, not the agent doing work.
+_Avoid_: previous, recent

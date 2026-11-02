@@ -17,6 +17,9 @@ pub struct Pane {
     pub current_path: String,
     pub title: String,
     pub session_attached: bool,
+    /// Nanoseconds since the epoch when the pane was last focused, from the
+    /// `@agentop_focus` pane option set by the tmux hooks in `agentop init`.
+    pub focus: Option<u128>,
 }
 
 /// tmux escapes control characters (and tabs) in -F output, so use a
@@ -51,6 +54,7 @@ pub fn list_panes() -> Result<Vec<Pane>> {
         "#{pane_current_path}",
         "#{pane_title}",
         "#{session_attached}",
+        "#{@agentop_focus}",
     ];
     let fmt = fields.join(SEP);
     let raw = match tmux(&["list-panes", "-a", "-F", &fmt]) {
@@ -77,6 +81,7 @@ pub fn list_panes() -> Result<Vec<Pane>> {
             current_path: f[7].to_string(),
             title: f[8].to_string(),
             session_attached: f[9] != "0",
+            focus: f[10].parse().ok(),
         });
     }
     Ok(panes)
@@ -91,6 +96,14 @@ pub fn capture(pane_id: &str) -> Result<Vec<String>> {
         lines.pop();
     }
     Ok(lines)
+}
+
+/// The pane the tmux client is looking at. Inside a `display-popup` this is
+/// the pane the popup was opened from, since the popup is not a pane.
+pub fn active_pane() -> Option<String> {
+    let id = tmux(&["display-message", "-p", "#{pane_id}"]).ok()?;
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 pub fn inside_tmux() -> bool {

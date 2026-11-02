@@ -24,6 +24,7 @@ fn main() -> Result<()> {
         }
         Some(("list", sub)) => list(sub.get_flag("json")),
         Some(("next", _)) => next(),
+        Some(("last", _)) => last(),
         Some(("hook", sub)) => {
             // Hooks must never break the agent: swallow errors.
             if let Ok(Some((pane, st))) = state::record_from_stdin() {
@@ -103,6 +104,24 @@ fn next() -> Result<()> {
     }
 }
 
+fn last() -> Result<()> {
+    let sessions = session::scan()?;
+    let active = tmux::inside_tmux().then(tmux::active_pane).flatten();
+    let Some(a) = session::last_used(&sessions, active.as_deref()) else {
+        if tmux::inside_tmux() {
+            let _ = tmux::tmux(&["display-message", "agentop: no previous agent"]);
+        } else {
+            eprintln!("no previous agent");
+        }
+        return Ok(());
+    };
+    if tmux::inside_tmux() {
+        tmux::switch_to(&a.pane_id)
+    } else {
+        Err(tmux::exec_attach(&a.pane_id, &a.session))
+    }
+}
+
 fn init_text() -> String {
     let mut out = String::from(TMUX_TEXT);
     for agent in agents::AGENTS {
@@ -117,8 +136,16 @@ fn init_text() -> String {
 const TMUX_TEXT: &str = r#"# tmux: add to ~/.tmux.conf, then `tmux source ~/.tmux.conf`
 #    prefix + a : open the dashboard in a popup (Enter switches, popup closes)
 #    prefix + A : jump straight to the next agent waiting for input
+#    prefix + L : jump back to the agent you used before this one
 bind "a" display-popup -E -w 90% -h 90% "agentop"
 bind "A" run-shell "agentop next"
+bind "L" run-shell "agentop last"
+# Records when each pane was last focused, so the dashboard can list the last
+# used agent first and `agentop last` knows where to go.
+set-hook -g after-select-pane 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
+set-hook -g after-select-window 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
+set-hook -g client-session-changed 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
+set-hook -g pane-focus-in 'run-shell -b "tmux set -pt #{pane_id} @agentop_focus $(date +%s%N)"'
 # Needed for notifications: lets tmux know when the terminal window has focus,
 # so agentop only skips a notification while you are actually looking at it.
 set -g focus-events on
