@@ -327,13 +327,8 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     } else {
         format!("{} / {}", app.agents.len(), app.all.len())
     };
-    let mut spans = vec![
-        Span::styled(
-            " agentop ",
-            Style::new().fg(Color::Black).bg(Color::Blue).bold(),
-        ),
-        Span::raw(format!("  {shown} agents   ")),
-    ];
+    let sep = || Span::styled(" · ", Style::new().fg(Color::DarkGray));
+    let mut spans = vec![Span::raw(format!(" {shown} agents"))];
     for s in [
         Status::NeedsInput,
         Status::Working,
@@ -343,11 +338,11 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     ] {
         let n = count(s);
         if n > 0 {
+            spans.push(sep());
             spans.push(Span::styled(
                 format!("{} {} {}", status_icon(s), n, s.label().to_lowercase()),
                 status_style(s),
             ));
-            spans.push(Span::raw("   "));
         }
     }
     f.render_widget(Line::from(spans), area);
@@ -473,6 +468,14 @@ fn draw_preview(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
+    f.render_widget(
+        Line::from(Span::styled(
+            concat!("agentop v", env!("CARGO_PKG_VERSION"), " "),
+            Style::new().fg(Color::DarkGray),
+        ))
+        .right_aligned(),
+        area,
+    );
     if app.typing {
         f.render_widget(
             Line::from(vec![
@@ -496,32 +499,32 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Black).bg(Color::Gray),
         )
     };
-    let label = |l: &str| Span::styled(format!(" {l}  "), Style::new().fg(Color::DarkGray));
+    let label = |l: &str| Span::styled(format!(" {l}"), Style::new().fg(Color::DarkGray));
     let enter_label = if tmux::inside_tmux() {
         "switch"
     } else {
         "attach"
     };
-    let mut spans = vec![
-        key("↑↓/jk"),
-        label("move"),
-        key("/"),
-        label("filter"),
-        key("⏎"),
-        label(enter_label),
-        key("1-9"),
-        label("jump"),
-        key("tab"),
-        label("next waiting"),
-        key("p"),
-        label("preview"),
-        key("r"),
-        label("refresh"),
-        key("q"),
-        label("quit"),
+    let mut items = vec![
+        ("↑↓/jk", "move"),
+        ("/", "filter"),
+        ("⏎", enter_label),
+        ("1-9", "jump"),
+        ("tab", "next waiting"),
+        ("p", "preview"),
+        ("r", "refresh"),
+        ("q", "quit"),
     ];
     if !app.filter.is_empty() {
-        spans.extend([key("esc"), label("clear filter")]);
+        items.push(("esc", "clear filter"));
+    }
+    let mut spans = Vec::new();
+    for (i, (k, l)) in items.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::new().fg(Color::DarkGray)));
+        }
+        spans.push(key(k));
+        spans.push(label(l));
     }
     f.render_widget(Line::from(spans), area);
 }

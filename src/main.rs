@@ -137,7 +137,7 @@ const TMUX_TEXT: &str = r#"# tmux: add to ~/.tmux.conf, then `tmux source ~/.tmu
 #    prefix + a : open the dashboard in a popup (Enter switches, popup closes)
 #    prefix + A : jump straight to the next agent waiting for input
 #    prefix + L : jump back to the agent you used before this one
-bind "a" display-popup -E -w 90% -h 90% "agentop"
+bind "a" display-popup -E -d "agentop" -w 90% -h 90% "agentop"
 bind "A" run-shell "agentop next"
 bind "L" run-shell "agentop last"
 # Records when each pane was last focused, so the dashboard can list the last

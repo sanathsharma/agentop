@@ -53,7 +53,7 @@ agentop init          # print config snippets
 ## tmux setup
 
 ```tmux
-bind "a" display-popup -E -w 90% -h 90% "agentop"    # prefix+a: dashboard popup
+bind "a" display-popup -E -d "agentop" -w 90% -h 90% "agentop"    # prefix+a: dashboard popup
 bind "A" run-shell "agentop next"                    # prefix+A: jump to next waiting agent
 bind "L" run-shell "agentop last"                    # prefix+L: jump to the last used agent
 set -g focus-events on                               # required for notification focus detection
