@@ -11,7 +11,7 @@ use ratatui::{
   layout::{Constraint, Layout, Rect},
   style::{Color, Modifier, Style, Stylize},
   text::{Line, Span},
-  widgets::{Block, BorderType, Cell, Paragraph, Row, Table, TableState},
+  widgets::{Block, BorderType, Cell, Clear, Paragraph, Row, Table, TableState},
 };
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,8 @@ struct App {
   filter: String,
   /// True while the `/` prompt is open and keys edit `filter`.
   typing: bool,
+  /// True while the help menu covers the table. It takes every key until closed.
+  help: bool,
   matcher: Matcher,
   /// Pane the dashboard was opened from, see `CONTEXT.md`.
   origin: Option<String>,
@@ -177,6 +179,7 @@ fn event_loop(terminal: &mut DefaultTerminal, opts: &Options) -> Result<Exit> {
     last_refresh: Instant::now(),
     filter: String::new(),
     typing: false,
+    help: false,
     matcher: Matcher::new(Config::DEFAULT),
     origin: tmux::inside_tmux().then(tmux::active_pane).flatten(),
   };
@@ -217,7 +220,16 @@ fn event_loop(terminal: &mut DefaultTerminal, opts: &Options) -> Result<Exit> {
         }
         continue;
       }
+      if app.help {
+        match (key.code, key.modifiers) {
+          (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(Exit::Quit),
+          (KeyCode::Esc | KeyCode::Char('q' | '?'), _) => app.help = false,
+          _ => {}
+        }
+        continue;
+      }
       match (key.code, key.modifiers) {
+        (KeyCode::Char('?'), _) => app.help = true,
         (KeyCode::Esc, _) if !app.filter.is_empty() => app.set_filter(String::new()),
         (KeyCode::Char('q') | KeyCode::Esc, _) => return Ok(Exit::Quit),
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(Exit::Quit),
@@ -321,6 +333,66 @@ fn draw(f: &mut Frame, app: &mut App) {
   }
 
   draw_footer(f, footer, app);
+  if app.help {
+    draw_help(f, body);
+  }
+}
+
+/// Every key, for the help menu.
+const HELP_MENU: &[(&str, &str)] = &[
+  ("j/k, up/down", "move the cursor"),
+  ("g/G, Home/End", "first, last agent"),
+  (
+    "enter, l, right",
+    "switch to the agent's pane (attach outside tmux)",
+  ),
+  ("1-9", "switch to the agent in that row"),
+  ("tab, n", "select the next agent needing input"),
+  ("/", "filter agents (enter keeps it, esc clears it)"),
+  ("esc", "clear the filter, or quit when there is none"),
+  ("p", "show or hide the screen preview"),
+  ("r", "refresh now"),
+  ("?", "open this help"),
+  ("q, ctrl-c", "quit"),
+];
+
+const HELP_TITLE: &str = " Help (esc or q closes) ";
+
+fn draw_help(f: &mut Frame, area: Rect) {
+  let key_width = HELP_MENU.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+  let lines: Vec<Line> = HELP_MENU
+    .iter()
+    .map(|(key, what)| Line::from(format!(" {key:<key_width$}  {what}")))
+    .collect();
+  let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+  // The widest line, a space after it and the two borders.
+  let width = widest
+    .saturating_add(3)
+    .max(HELP_TITLE.len().saturating_add(2))
+    .min(usize::from(area.width));
+  let width = u16::try_from(width).unwrap_or(u16::MAX);
+  let height = u16::try_from(lines.len())
+    .unwrap_or(u16::MAX)
+    .saturating_add(2)
+    .min(area.height);
+  let [_, row, _] = Layout::vertical([
+    Constraint::Fill(1),
+    Constraint::Length(height),
+    Constraint::Fill(1),
+  ])
+  .areas(area);
+  let [_, popup, _] = Layout::horizontal([
+    Constraint::Fill(1),
+    Constraint::Length(width),
+    Constraint::Fill(1),
+  ])
+  .areas(row);
+  f.render_widget(Clear, popup);
+  let block = Block::bordered()
+    .border_type(BorderType::Rounded)
+    .border_style(Style::new().fg(Color::DarkGray))
+    .title(HELP_TITLE);
+  f.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -509,13 +581,10 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     "attach"
   };
   let mut items = vec![
-    ("↑↓/jk", "move"),
-    ("/", "filter"),
+    ("jk", "move"),
     ("⏎", enter_label),
-    ("1-9", "jump"),
-    ("tab", "next waiting"),
-    ("p", "preview"),
-    ("r", "refresh"),
+    ("/", "filter"),
+    ("?", "help"),
     ("q", "quit"),
   ];
   if !app.filter.is_empty() {

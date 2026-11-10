@@ -35,6 +35,7 @@ agentop init                  # prints the tmux + Claude Code snippets below
 | `p`            | Toggle the pane preview                            |
 | `r`            | Refresh now                                        |
 | `Esc`          | Clear the filter, or quit when none is active      |
+| `?`            | Open the help menu                                 |
 | `q`            | Quit                                               |
 
 ## Commands
