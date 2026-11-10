@@ -13,101 +13,101 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookState {
-    pub event: String,
-    pub ts: u64,
-    #[serde(default)]
-    pub message: Option<String>,
-    /// Set on `Notification` events, e.g. `permission_prompt` or `idle_prompt`.
-    #[serde(default)]
-    pub notification_type: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
+  pub event: String,
+  pub ts: u64,
+  #[serde(default)]
+  pub message: Option<String>,
+  /// Set on `Notification` events, e.g. `permission_prompt` or `idle_prompt`.
+  #[serde(default)]
+  pub notification_type: Option<String>,
+  #[serde(default)]
+  pub session_id: Option<String>,
 }
 
 fn dir() -> PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
-        });
-    base.join("agentop").join("panes")
+  let base = std::env::var_os("XDG_STATE_HOME")
+    .map(PathBuf::from)
+    .unwrap_or_else(|| {
+      PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
+    });
+  base.join("agentop").join("panes")
 }
 
 fn file_for(pane_id: &str) -> PathBuf {
-    dir().join(format!("{}.json", pane_id.trim_start_matches('%')))
+  dir().join(format!("{}.json", pane_id.trim_start_matches('%')))
 }
 
 pub fn load_all() -> HashMap<String, HookState> {
-    let mut map = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(dir()) else {
-        return map;
+  let mut map = HashMap::new();
+  let Ok(entries) = std::fs::read_dir(dir()) else {
+    return map;
+  };
+  for e in entries.flatten() {
+    let path = e.path();
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+      continue;
     };
-    for e in entries.flatten() {
-        let path = e.path();
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if let Ok(s) = std::fs::read_to_string(&path)
-            && let Ok(st) = serde_json::from_str::<HookState>(&s)
-        {
-            map.insert(format!("%{stem}"), st);
-        }
+    if let Ok(s) = std::fs::read_to_string(&path)
+      && let Ok(st) = serde_json::from_str::<HookState>(&s)
+    {
+      map.insert(format!("%{stem}"), st);
     }
-    map
+  }
+  map
 }
 
 /// Entry point for `agentop hook`: reads the hook JSON from stdin and records it.
 /// Never fails loudly — a broken hook must not disturb the agent.
 /// Returns the pane and recorded state so the caller can notify.
 pub fn record_from_stdin() -> Result<Option<(String, HookState)>> {
-    let Some(pane) = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty()) else {
-        return Ok(None); // not running inside tmux; nothing to track
-    };
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input).ok();
-    let v: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+  let Some(pane) = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty()) else {
+    return Ok(None); // not running inside tmux; nothing to track
+  };
+  let mut input = String::new();
+  std::io::stdin().read_to_string(&mut input).ok();
+  let v: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
 
-    let event = v["hook_event_name"].as_str().unwrap_or("").to_string();
-    let path = file_for(&pane);
+  let event = v["hook_event_name"].as_str().unwrap_or("").to_string();
+  let path = file_for(&pane);
 
-    if event == "SessionEnd" {
-        let _ = std::fs::remove_file(path);
-        return Ok(None);
-    }
+  if event == "SessionEnd" {
+    let _ = std::fs::remove_file(path);
+    return Ok(None);
+  }
 
-    let message = match event.as_str() {
-        "Notification" => v["message"].as_str().map(String::from),
-        "UserPromptSubmit" => v["prompt"]
-            .as_str()
-            .map(|p| format!("› {}", p.lines().next().unwrap_or(""))),
-        _ => None,
-    };
-    let st = HookState {
-        event,
-        ts: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-        message,
-        notification_type: v["notification_type"].as_str().map(String::from),
-        session_id: v["session_id"].as_str().map(String::from),
-    };
-    std::fs::create_dir_all(dir()).context("creating state dir")?;
-    // Write-then-rename so the TUI never reads a half-written file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&st)?)?;
-    std::fs::rename(tmp, path)?;
-    Ok(Some((pane, st)))
+  let message = match event.as_str() {
+    "Notification" => v["message"].as_str().map(String::from),
+    "UserPromptSubmit" => v["prompt"]
+      .as_str()
+      .map(|p| format!("› {}", p.lines().next().unwrap_or(""))),
+    _ => None,
+  };
+  let st = HookState {
+    event,
+    ts: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+    message,
+    notification_type: v["notification_type"].as_str().map(String::from),
+    session_id: v["session_id"].as_str().map(String::from),
+  };
+  std::fs::create_dir_all(dir()).context("creating state dir")?;
+  // Write-then-rename so the TUI never reads a half-written file.
+  let tmp = path.with_extension("json.tmp");
+  std::fs::write(&tmp, serde_json::to_vec(&st)?)?;
+  std::fs::rename(tmp, path)?;
+  Ok(Some((pane, st)))
 }
 
 /// Remove state files for panes that no longer exist.
 pub fn prune(live_panes: &[String]) {
-    let Ok(entries) = std::fs::read_dir(dir()) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let path = e.path();
-        if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            && !live_panes.iter().any(|p| p.trim_start_matches('%') == stem)
-        {
-            let _ = std::fs::remove_file(path);
-        }
+  let Ok(entries) = std::fs::read_dir(dir()) else {
+    return;
+  };
+  for e in entries.flatten() {
+    let path = e.path();
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+      && !live_panes.iter().any(|p| p.trim_start_matches('%') == stem)
+    {
+      let _ = std::fs::remove_file(path);
     }
+  }
 }

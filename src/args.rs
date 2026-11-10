@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 
 pub fn get_matches() -> ArgMatches {
-    Command::new("agentop")
+  Command::new("agentop")
         .version(env!("CARGO_PKG_VERSION"))
         .about(
             "Dashboard for AI coding agents running across every session of your tmux server. \
